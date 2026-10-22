@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>实验室安全行为识别工具</title>
+    <style>
+        body {
+            font-family: "微软雅黑", sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 0 20px;
+        }
+        .upload-box {
+            border: 2px dashed #ccc;
+            padding: 40px;
+            text-align: center;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+        .result-box {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 8px;
+            background: #f5f5f5;
+            display: none;
+        }
+        .risk {
+            color: #d93025;
+            font-weight: bold;
+            font-size: 18px;
+        }
+        .safe {
+            color: #188038;
+            font-weight: bold;
+            font-size: 18px;
+        }
+        .item {
+            margin: 10px 0;
+        }
+        a{
+            display:inline-block;
+            margin-bottom:10px;
+        }
+    </style>
+</head>
+<body>
+    <h2>实验室安全行为识别工具</h2>
+    <a href="/historypage">查看检测历史记录</a>
+    <div class="upload-box">
+        <input type="file" id="fileInput" accept="image/*">
+        <br><br>
+        <button onclick="uploadImage()" style="padding:8px 20px;cursor:pointer;">开始识别</button>
+    </div>
+
+    <div class="result-box" id="resultBox">
+        <h3>识别结果</h3>
+        <div id="riskLevel"></div>
+        <div class="item">护目镜：<span id="goggles"></span> （置信度：<span id="gogglesConf"></span>）</div>
+        <div class="item">手套：<span id="gloves"></span> （置信度：<span id="glovesConf"></span>）</div>
+        <div class="item">防护服：<span id="coat"></span> （置信度：<span id="coatConf"></span>）</div>
+        <div class="item" style="margin-top:15px;">检测时间：<span id="detectTime"></span></div>
+    </div>
+
+    <script>
+        function uploadImage() {
+            const fileInput = document.getElementById('fileInput');
+            if (!fileInput.files[0]) {
+                alert('请先选择一张图片');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(res => res.json())
+            .then(res => {
+                if (res.code === 200) {
+                    const data = res.data;
+                    const result = data.result;
+                    
+                    document.getElementById('resultBox').style.display = 'block';
+                    
+                    // 风险等级
+                    const riskEl = document.getElementById('riskLevel');
+                    if (data.risk_level === '存在风险') {
+                        riskEl.className = 'risk';
+                        riskEl.innerText = '⚠ 存在安全风险';
+                    } else {
+                        riskEl.className = 'safe';
+                        riskEl.innerText = '✅ 安全合规';
+                    }
+
+                    // 填充各项结果
+                    document.getElementById('goggles').innerText = result.goggles;
+                    document.getElementById('gogglesConf').innerText = result.goggles_conf;
+                    document.getElementById('gloves').innerText = result.gloves;
+                    document.getElementById('glovesConf').innerText = result.gloves_conf;
+                    document.getElementById('coat').innerText = result.coat;
+                    document.getElementById('coatConf').innerText = result.coat_conf;
+                    document.getElementById('detectTime').innerText = data.detect_time;
+                } else {
+                    alert(res.msg);
+                }
+            })
+            .catch(err => {
+                alert('上传失败：' + err);
+            });
+        }
+    </script>
+</body>
+</html>
