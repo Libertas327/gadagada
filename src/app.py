@@ -3,6 +3,7 @@ import os
 import uuid
 from datetime import datetime
 import sqlite3
+from ultralytics import YOLO
 
 # 初始化Flask应用
 app = Flask(__name__)
@@ -10,12 +11,23 @@ app = Flask(__name__)
 # 配置：上传文件保存的文件夹
 UPLOAD_FOLDER = 'uploads'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
 # 允许的文件格式
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'mp4'}
 
 # 自动创建上传文件夹
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
+
+# ==================== 加载YOLO模型 ====================
+# 模型路径和类别映射，和训练时严格对应
+MODEL_PATH = "./weights/best.pt"
+CLASS_NAMES = ["gloves", "goggles", "gown"]  # 索引0:手套  索引1:护目镜  索引2:防护服
+CONF_THRESHOLD = 0.5  # 置信度阈值，超过判定为佩戴/穿戴
+
+# 全局加载模型，只加载一次，提升速度
+model = YOLO(MODEL_PATH)
+print("✅ YOLO模型加载完成")
 
 # 工具函数：检查文件格式
 def allowed_file(filename):
@@ -39,7 +51,7 @@ def handle_exception(e):
 def index():
     return render_template('index.html')
 
-# 文件上传 + 模拟识别接口
+# 文件上传 + YOLO识别接口
 @app.route('/upload', methods=['POST'])
 def upload_file():
     # 1. 检查有没有上传文件
@@ -49,28 +61,68 @@ def upload_file():
     file = request.files['file']
     if file.filename == '':
         return jsonify({'code': 400, 'msg': '文件名为空'}), 400
+
     # 2. 检查文件格式
     if not allowed_file(file.filename):
         return jsonify({'code': 400, 'msg': '仅支持 png/jpg/jpeg/mp4 格式'}), 400
+
     # 3. 保存文件，用随机命名避免重名
     ext = file.filename.rsplit('.', 1)[1].lower()
     new_filename = str(uuid.uuid4()) + '.' + ext
     file_path = os.path.join(app.config['UPLOAD_FOLDER'], new_filename)
     file.save(file_path)
-    # 4. 模拟AI识别结果（后续替换成YOLO）
-    detect_result = {
-        "goggles": "佩戴",
-        "goggles_conf": 0.89,
-        "gloves": "未佩戴",
-        "gloves_conf": 0.76,
-        "coat": "穿戴",
-        "coat_conf": 0.92
+
+    # 4. YOLO真实识别
+    results = model(file_path, conf=CONF_THRESHOLD, iou=0.45, imgsz=640)
+    boxes = results[0].boxes
+
+    # 初始化每个类别的最高置信度
+    class_max_conf = {
+        "gloves": 0.0,
+        "goggles": 0.0,
+        "gown": 0.0
     }
-    # 5. 判断风险等级
+    detections = []
+
+    # 遍历所有检测框（循环内处理每个框）
+    for box in boxes:
+        cls_id = int(box.cls)
+        cls_name = CLASS_NAMES[cls_id]
+        conf = float(box.conf)
+
+        # 更新该类别的最高置信度
+        if conf > class_max_conf[cls_name]:
+            class_max_conf[cls_name] = conf
+
+        # 提取框坐标
+        x1, y1, x2, y2 = box.xyxy[0].tolist()
+        detections.append({
+            "class_name": cls_name,
+            "confidence": round(conf, 4),
+            "bbox": {
+                "x1": round(x1, 2),
+                "y1": round(y1, 2),
+                "x2": round(x2, 2),
+                "y2": round(y2, 2)
+            }
+        })
+
+    # 5. 转换为业务结果格式（补上你漏掉的 detect_result）
+    detect_result = {
+        "goggles": "佩戴" if class_max_conf["goggles"] >= CONF_THRESHOLD else "未佩戴",
+        "goggles_conf": round(class_max_conf["goggles"], 4),
+        "gloves": "佩戴" if class_max_conf["gloves"] >= CONF_THRESHOLD else "未佩戴",
+        "gloves_conf": round(class_max_conf["gloves"], 4),
+        "coat": "穿戴" if class_max_conf["gown"] >= CONF_THRESHOLD else "未穿戴",
+        "coat_conf": round(class_max_conf["gown"], 4)
+    }
+
+    # 6. 判断风险等级
     risk_level = "存在风险" if (detect_result["goggles"] == "未佩戴" 
                                 or detect_result["gloves"] == "未佩戴" 
                                 or detect_result["coat"] == "未穿戴") else "合规"
-    # 6. 保存记录到数据库
+
+    # 7. 保存记录到数据库
     conn = get_db()
     cursor = conn.cursor()
     detect_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -84,17 +136,20 @@ def upload_file():
           risk_level, file_path))
     conn.commit()
     conn.close()
-    # 7. 返回识别结果给前端
+
+    # 8. 返回识别结果给前端
     return jsonify({
         'code': 200,
         'msg': '识别成功',
         'data': {
-            'filename': file.filename,
+            'filename': new_filename,
             'detect_time': detect_time,
             'result': detect_result,
-            'risk_level': risk_level
+            'risk_level': risk_level,
+            'detections': detections
         }
     })
+
 
 # 图片访问接口：预览上传图片
 @app.route('/get_img/<filename>')
@@ -131,4 +186,4 @@ def get_history():
 if __name__ == '__main__':
     print("🚀 后端服务启动中...")
     print("📌 访问地址：http://127.0.0.1:5000")
-    app.run(debug=True, port=5000)
+    app.run(debug=False, port=5000)

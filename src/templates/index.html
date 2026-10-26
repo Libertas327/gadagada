@@ -41,6 +41,23 @@
             display:inline-block;
             margin-bottom:10px;
         }
+        /* 检测结果图容器 */
+        .img-container {
+            position: relative;
+            margin-top: 20px;
+        }
+        .img-container img {
+            max-width: 100%;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            display: block;
+        }
+        .img-container canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
     </style>
 </head>
 <body>
@@ -51,7 +68,6 @@
         <br><br>
         <button onclick="uploadImage()" style="padding:8px 20px;cursor:pointer;">开始识别</button>
     </div>
-
     <div class="result-box" id="resultBox">
         <h3>识别结果</h3>
         <div id="riskLevel"></div>
@@ -59,8 +75,12 @@
         <div class="item">手套：<span id="gloves"></span> （置信度：<span id="glovesConf"></span>）</div>
         <div class="item">防护服：<span id="coat"></span> （置信度：<span id="coatConf"></span>）</div>
         <div class="item" style="margin-top:15px;">检测时间：<span id="detectTime"></span></div>
+        <!-- 检测结果图容器 -->
+        <div class="img-container" id="imgContainer">
+            <img id="resultImg" alt="检测结果图">
+            <canvas id="resultCanvas"></canvas>
+        </div>
     </div>
-
     <script>
         function uploadImage() {
             const fileInput = document.getElementById('fileInput');
@@ -68,10 +88,8 @@
                 alert('请先选择一张图片');
                 return;
             }
-
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
-
             fetch('/upload', {
                 method: 'POST',
                 body: formData
@@ -93,7 +111,6 @@
                         riskEl.className = 'safe';
                         riskEl.innerText = '✅ 安全合规';
                     }
-
                     // 填充各项结果
                     document.getElementById('goggles').innerText = result.goggles;
                     document.getElementById('gogglesConf').innerText = result.goggles_conf;
@@ -102,6 +119,9 @@
                     document.getElementById('coat').innerText = result.coat;
                     document.getElementById('coatConf').innerText = result.coat_conf;
                     document.getElementById('detectTime').innerText = data.detect_time;
+
+                    // 绘制检测框
+                    drawDetectionBoxes(data.filename, data.detections);
                 } else {
                     alert(res.msg);
                 }
@@ -109,6 +129,63 @@
             .catch(err => {
                 alert('上传失败：' + err);
             });
+        }
+
+        // 在图片上绘制检测框与标签
+        function drawDetectionBoxes(filename, detections) {
+            const img = document.getElementById('resultImg');
+            const canvas = document.getElementById('resultCanvas');
+            const container = document.getElementById('imgContainer');
+
+            container.style.display = 'block';
+            img.src = '/get_img/' + filename;
+
+            img.onload = function () {
+                // 画布尺寸与图片显示尺寸对齐
+                canvas.width = img.clientWidth;
+                canvas.height = img.clientHeight;
+
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // 原图坐标 → 页面显示坐标 的缩放比例
+                const scaleX = img.clientWidth / img.naturalWidth;
+                const scaleY = img.clientHeight / img.naturalHeight;
+
+                // 类别对应配色
+                const colorMap = {
+                    'gloves': '#ffc107',   // 黄色 - 手套
+                    'goggles': '#1976d2',  // 蓝色 - 护目镜
+                    'gown': '#7b1fa2'      // 紫色 - 防护服
+                };
+
+                detections.forEach(item => {
+                    const { x1, y1, x2, y2 } = item.bbox;
+                    const rx1 = x1 * scaleX;
+                    const ry1 = y1 * scaleY;
+                    const rw = (x2 - x1) * scaleX;
+                    const rh = (y2 - y1) * scaleY;
+
+                    const color = colorMap[item.class_name] || '#f44336';
+
+                    // 绘制矩形框
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = Math.max(2, canvas.width * 0.004);
+                    ctx.strokeRect(rx1, ry1, rw, rh);
+
+                    // 绘制标签背景
+                    const label = `${item.class_name} ${(item.confidence * 100).toFixed(1)}%`;
+                    ctx.font = 'bold 14px "微软雅黑", sans-serif';
+                    const textWidth = ctx.measureText(label).width + 12;
+                    const textHeight = 22;
+                    ctx.fillStyle = color;
+                    ctx.fillRect(rx1, ry1 - textHeight, textWidth, textHeight);
+
+                    // 绘制标签文字
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillText(label, rx1 + 6, ry1 - 6);
+                });
+            };
         }
     </script>
 </body>
