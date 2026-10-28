@@ -68,7 +68,6 @@
         <tbody id="tableBody">
         </tbody>
     </table>
-
     <script>
         fetch('/history')
         .then(res=>res.json())
@@ -81,7 +80,6 @@
                 // 从image_path提取文件名
                 const imgName = item.image_path.split('\\').pop().split('/').pop();
                 const imgUrl = `/get_img/${imgName}`;
-
                 tr.innerHTML = `
                     <td>${idx+1}</td>
                     <td>${item.detect_time}</td>
@@ -95,7 +93,6 @@
                 tbody.appendChild(tr);
             })
         })
-
         // 删除记录函数
         function deleteRecord(id){
             if(!confirm("确定删除这条记录？")) return;
