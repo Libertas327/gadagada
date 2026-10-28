@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh‑CN">
+<head>
+<meta charset="UTF‑8">
+<title>告警审核</title>
+<style>
+body{font-family:"微软雅黑";max‑width:800px;margin:40px auto;padding:0 20px;}
+img{max‑width:600px;border:1px solid #aaa;}
+.btn‑pass{background:#28a745;color:white;border:none;padding:10px 20px;margin‑right:10px;border‑radius:4px;cursor:pointer;}
+.btn‑reject{background:#dc3545;color:white;border:none;padding:10px 20px;border‑radius:4px;cursor:pointer;}
+.back{display:inline‑block;margin‑bottom:20px;}
+</style>
+</head>
+<body>
+<a class="back" href="/">← 返回首页</a>
+<h2>告警证据审核</h2>
+<div>
+    <p><strong>告警时间：</strong>{{item.alarm_time}}</p>
+    <p><strong>护目镜：</strong>{{item.lack_goggles}}</p>
+    <p><strong>手套：</strong>{{item.lack_gloves}}</p>
+    <p><strong>防护服：</strong>{{item.lack_coat}}</p>
+    <p><strong>当前状态：</strong>
+        {% if item.audit_status=="pending" %}待审批
+        {% elif item.audit_status=="pass" %}✅审核合格（误识别）
+        {% elif item.audit_status=="reject" %}❌审核不合格（真实违规）
+        {% endif %}
+    </p>
+    <h4>证据截图：</h4>
+    {% set filename = item.alarm_img_path.split('\\').pop().split('/').pop() %}
+    <img src="/get_alarm_img/{{filename}}" alt="告警截图">
+    <br><br>
+    {% if item.audit_status == "pending" %}
+    <button class="btn‑pass" onclick="doAudit('pass',{{item.id}})">审核合格（属于误识别）</button>
+    <button class="btn‑reject" onclick="doAudit('reject',{{item.id}})">审核不合格（真实违规）</button>
+    {% else %}
+    <p>该条告警已经完成审核，不可重复操作</p>
+    {% endif %}
+</div>
+
+<script>
+async function doAudit(status, aid){
+    if(!confirm("确认执行该审核操作？")) return;
+    const resp = await fetch(`/set_audit/${aid}`,{
+        method:"POST",
+        headers:{"Content‑Type":"application/json"},
+        body:JSON.stringify({"status":status})
+    });
+    const res = await resp.json();
+    alert(res.msg);
+    window.location.reload();
+}
+</script>
+</body>
+</html>

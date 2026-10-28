@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS detection_record (
 )
 ''')
 
-# =====新增：告警记录表，保存实时监控触发告警的截图=====
+# 告警记录表，新增 audit_status 审核状态
+# pending=待审批 pass=审核合格(误识别) reject=审核不合格(真实违规)
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS alarm_record (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,7 +29,8 @@ CREATE TABLE IF NOT EXISTS alarm_record (
     lack_goggles TEXT,
     lack_gloves TEXT,
     lack_coat TEXT,
-    remark TEXT
+    remark TEXT,
+    audit_status TEXT DEFAULT 'pending'
 )
 ''')
 

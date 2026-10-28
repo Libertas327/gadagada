@@ -6,7 +6,7 @@
     <style>
         body {
             font-family: "微软雅黑", sans-serif;
-            max-width: 800px;
+            max-width: 950px;
             margin: 50px auto;
             padding: 0 20px;
         }
@@ -37,11 +37,6 @@
         .item {
             margin: 10px 0;
         }
-        a{
-            display:inline-block;
-            margin-bottom:10px;
-        }
-        /* 检测结果图容器 */
         .img-container {
             position: relative;
             margin-top: 20px;
@@ -58,11 +53,24 @@
             left: 0;
             pointer-events: none;
         }
+        .pending-area{
+            margin-top:40px;
+            padding:20px;
+            border:1px solid #ffbaba;
+            background:#fff5f5;
+            border-radius:8px;
+        }
+        .pending-item{
+            border-bottom:1px solid #ddd;
+            padding:12px 0;
+        }
+        .pending-item a{
+            color:#0056b3;
+        }
     </style>
 </head>
 <body>
     <h2>实验室安全行为识别工具</h2>
-    <a href="/historypage">查看检测历史记录</a>
     <div class="upload-box">
         <input type="file" id="fileInput" accept="image/*">
         <br><br>
@@ -78,6 +86,15 @@
         </div>
     </div>
 
+    <!-- 待审批预警列表 -->
+    <div class="pending-area">
+        <h3>⚠ 待审批预警列表 <span id="pendingCount"></span></h3>
+        <button onclick="refreshPendingList()" style="padding:6px 12px;cursor:pointer;">刷新待审批列表</button>
+        <div id="pendingBox">
+            <p>暂无待审批预警</p>
+        </div>
+    </div>
+
     <div class="result-box" id="resultBox">
         <h3>识别结果</h3>
         <div id="riskLevel"></div>
@@ -85,15 +102,41 @@
         <div class="item">手套：<span id="gloves"></span> （置信度：<span id="glovesConf"></span>）</div>
         <div class="item">防护服：<span id="coat"></span> （置信度：<span id="coatConf"></span>）</div>
         <div class="item" style="margin-top:15px;">检测时间：<span id="detectTime"></span></div>
-        <!-- 检测结果图容器 -->
         <div class="img-container" id="imgContainer">
             <img id="resultImg" alt="检测结果图">
             <canvas id="resultCanvas"></canvas>
         </div>
     </div>
+
     <script>
         let alertTimer = null;
         let lastPopAlertTs = 0;
+
+        window.onload = function(){
+            refreshPendingList();
+        }
+
+        async function refreshPendingList(){
+            const resp = await fetch("/get_pending_alarm");
+            const res = await resp.json();
+            const box = document.getElementById("pendingBox");
+            document.getElementById("pendingCount").innerText = `(共${res.data.length}条待审批)`;
+            if(res.data.length===0){
+                box.innerHTML = "<p>暂无待审批预警</p>";
+                return;
+            }
+            let html = "";
+            res.data.forEach(item=>{
+                html += `
+                <div class="pending-item">
+                    <div>告警时间：${item.alarm_time}</div>
+                    <div>缺失：${item.lack_goggles} / ${item.lack_gloves} / ${item.lack_coat}</div>
+                    <div><a target="_blank" href="/audit/${item.id}">👉点击进入审核页面</a></div>
+                </div>
+                `
+            })
+            box.innerHTML = html;
+        }
 
         function uploadImage() {
             const fileInput = document.getElementById('fileInput');
@@ -112,10 +155,7 @@
                 if (res.code === 200) {
                     const data = res.data;
                     const result = data.result;
-
                     document.getElementById('resultBox').style.display = 'block';
-
-                    // 风险等级
                     const riskEl = document.getElementById('riskLevel');
                     if (data.risk_level === '存在风险') {
                         riskEl.className = 'risk';
@@ -124,7 +164,6 @@
                         riskEl.className = 'safe';
                         riskEl.innerText = '✅ 安全合规';
                     }
-                    // 填充各项结果
                     document.getElementById('goggles').innerText = result.goggles;
                     document.getElementById('gogglesConf').innerText = result.goggles_conf;
                     document.getElementById('gloves').innerText = result.gloves;
@@ -132,7 +171,6 @@
                     document.getElementById('coat').innerText = result.coat;
                     document.getElementById('coatConf').innerText = result.coat_conf;
                     document.getElementById('detectTime').innerText = data.detect_time;
-                    // 绘制检测框
                     drawDetectionBoxes(data.filename, data.detections);
                 } else {
                     alert(res.msg);
@@ -142,7 +180,7 @@
                 alert('上传失败：' + err);
             });
         }
-        // 在图片上绘制检测框与标签
+
         function drawDetectionBoxes(filename, detections) {
             const img = document.getElementById('resultImg');
             const canvas = document.getElementById('resultCanvas');
@@ -150,56 +188,41 @@
             container.style.display = 'block';
             img.src = '/get_img/' + filename;
             img.onload = function () {
-                // 画布尺寸与图片显示尺寸对齐
                 canvas.width = img.clientWidth;
                 canvas.height = img.clientHeight;
                 const ctx = canvas.getContext('2d');
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                // 原图坐标 → 页面显示坐标 的缩放比例
+                ctx.clearRect(0,0,canvas.width,canvas.height);
                 const scaleX = img.clientWidth / img.naturalWidth;
                 const scaleY = img.clientHeight / img.naturalHeight;
-                // 类别对应配色
-                const colorMap = {
-                    'gloves': '#ffc107',   // 黄色 - 手套
-                    'goggles': '#1976d2',  // 蓝色 - 护目镜
-                    'gown': '#7b1fa2'      // 紫色 - 防护服
-                };
-                detections.forEach(item => {
-                    const { x1, y1, x2, y2 } = item.bbox;
-                    const rx1 = x1 * scaleX;
-                    const ry1 = y1 * scaleY;
-                    const rw = (x2 - x1) * scaleX;
-                    const rh = (y2 - y1) * scaleY;
-                    const color = colorMap[item.class_name] || '#f44336';
-                    // 绘制矩形框
-                    ctx.strokeStyle = color;
-                    ctx.lineWidth = Math.max(2, canvas.width * 0.004);
-                    ctx.strokeRect(rx1, ry1, rw, rh);
-                    // 绘制标签背景
-                    const label = `${item.class_name} ${(item.confidence * 100).toFixed(1)}%`;
-                    ctx.font = 'bold 14px "微软雅黑", sans-serif';
-                    const textWidth = ctx.measureText(label).width + 12;
-                    const textHeight = 22;
-                    ctx.fillStyle = color;
-                    ctx.fillRect(rx1, ry1 - textHeight, textWidth, textHeight);
-                    // 绘制标签文字
-                    ctx.fillStyle = '#ffffff';
-                    ctx.fillText(label, rx1 + 6, ry1 - 6);
-                });
-            };
+                const colorMap = {'gloves':'#ffc107','goggles':'#1976d2','gown':'#7b1fa2'};
+                detections.forEach(item=>{
+                    const {x1,y1,x2,y2}=item.bbox;
+                    const rx1=x1*scaleX, ry1=y1*scaleY;
+                    const rw=(x2-x1)*scaleX, rh=(y2-y1)*scaleY;
+                    const c=colorMap[item.class_name]||'#f44336';
+                    ctx.strokeStyle=c; ctx.lineWidth=Math.max(2,canvas.width*0.004);
+                    ctx.strokeRect(rx1,ry1,rw,rh);
+                    const label = `${item.class_name} ${(item.confidence*100).toFixed(1)}%`;
+                    ctx.font='bold 14px "微软雅黑"';
+                    const tw = ctx.measureText(label).width+12;
+                    ctx.fillStyle=c;
+                    ctx.fillRect(rx1, ry1‑22, tw,22);
+                    ctx.fillStyle="#fff";
+                    ctx.fillText(label,rx1+6,ry1‑6);
+                })
+            }
         }
 
         function startLive(){
             document.getElementById("liveContainer").style.display="block";
             document.getElementById("liveImg").src="/video_feed";
-            // 轮询后端告警状态，500ms查一次
             alertTimer = setInterval(async ()=>{
                 const resp = await fetch("/get_alert");
                 const res = await resp.json();
                 if(res.last_alert > lastPopAlertTs){
                     lastPopAlertTs = res.last_alert;
-                    // 弹窗通知安全员
                     alert("【安全告警】检测到人员防护装备缺失，请安全员及时前往现场核查！");
+                    refreshPendingList();
                 }
             },500);
         }
