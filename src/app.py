@@ -1,13 +1,10 @@
 from flask import Flask, request, jsonify, send_from_directory, render_template, Response, redirect, url_for
 import os
-import uuid
-from datetime import datetime
 import sqlite3
 import time
 import cv2
 from ultralytics import YOLO
 
-# 初始化Flask应用
 app = Flask(__name__)
 # 配置：上传文件保存的文件夹
 UPLOAD_FOLDER = 'uploads'
@@ -68,7 +65,7 @@ def handle_exception(e):
 # 首页
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template("index.html")
 
 # 告警审核页面
 @app.route('/audit/<int:alarm_id>')
