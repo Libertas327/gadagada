@@ -1,134 +1,183 @@
-from flask import Flask, request, jsonify, send_from_directory, render_template
+import cv2
+import time
+import threading
 import os
-import uuid
-from datetime import datetime
 import sqlite3
+import requests
+from flask import Flask, Response, request, jsonify, render_template
+from PIL import Image
+import numpy as np
 
-# 初始化Flask应用
 app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = "uploads"
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# 配置：上传文件保存的文件夹
-UPLOAD_FOLDER = 'uploads'
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-# 允许的文件格式
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'mp4'}
+# ========== 【这里填模型同学的推理服务地址，他启动后发给你】 ==========
+MODEL_API_URL = "http://127.0.0.1:8000/predict"
 
-# 自动创建上传文件夹
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+# ========== 视频配置、全局变量、线程锁 ==========
+CAP_SOURCE = 0
+DETECT_INTERVAL = 1.0
+frame_lock = threading.Lock()
+latest_frame = None
+last_detect_time = 0
+cap = cv2.VideoCapture(CAP_SOURCE)
 
-# 工具函数：检查文件格式
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+# ========== 数据库初始化 ==========
+def init_db():
+    conn = sqlite3.connect("record.db")
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS history
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  img_path TEXT,
+                  result TEXT,
+                  create_time TEXT)''')
+    conn.commit()
+    conn.close()
 
-# 工具函数：连接数据库
-def get_db():
-    conn = sqlite3.connect('database.db')
-    conn.row_factory = sqlite3.Row
-    return conn
+init_db()
 
-# 全局异常捕获
-@app.errorhandler(Exception)
-def handle_exception(e):
-    print(f"服务异常：{str(e)}")
-    return jsonify({"code":500, "msg":f"服务器内部错误：{str(e)}"}),500
+# ========== 抓拍保存+入库函数 ==========
+def save_and_record(origin_frame, result_text):
+    timestr = time.strftime("%Y%m%d_%H%M%S")
+    save_name = f"violate_{timestr}.jpg"
+    save_path = os.path.join(app.config['UPLOAD_FOLDER'], save_name)
+    cv2.imwrite(save_path, origin_frame)
 
-# ==================== 核心接口 ====================
-# 首页：返回前端网页
+    conn = sqlite3.connect("record.db")
+    c = conn.cursor()
+    c.execute("INSERT INTO history(img_path, result, create_time) VALUES (?, ?, ?)",
+              (save_name, result_text, timestr))
+    conn.commit()
+    conn.close()
+    return save_name
+
+# ========== 调用同学的模型接口，不再本地加载YOLO！ ==========
+def detect_frame(cv_frame):
+    # 把opencv帧转成jpg二进制，传给模型接口
+    ret, buf = cv2.imencode(".jpg", cv_frame)
+    img_bytes = buf.tobytes()
+    try:
+        resp = requests.post(MODEL_API_URL, files={"image": img_bytes}, timeout=5)
+        data = resp.json()
+        annotated_b64 = data["image"]
+        import base64
+        img_bin = base64.b64decode(annotated_b64)
+        nparr = np.frombuffer(img_bin, np.uint8)
+        annotated_frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        info_str = data["result"]
+        # 违规判断标签，和模型那边标签保持一致
+        is_violate = "no_helmet" in info_str
+        return annotated_frame, info_str, is_violate
+    except Exception as e:
+        print("模型接口调用失败：", e)
+        return cv_frame, "模型服务未连接", False
+
+# ========== 后台视频线程 ==========
+def video_loop():
+    global latest_frame, last_detect_time
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            time.sleep(0.2)
+            continue
+        now = time.time()
+        if now - last_detect_time > DETECT_INTERVAL:
+            annotated, info, violate = detect_frame(frame)
+            last_detect_time = now
+            if violate:
+                save_and_record(annotated, info)
+            out_frame = annotated
+        else:
+            out_frame = frame
+
+        with frame_lock:
+            latest_frame = out_frame.copy()
+
+t = threading.Thread(target=video_loop, daemon=True)
+t.start()
+
+# ========== 视频流生成 ==========
+def gen_stream():
+    global latest_frame
+    while True:
+        with frame_lock:
+            if latest_frame is None:
+                time.sleep(0.05)
+                continue
+            ret, buffer = cv2.imencode(".jpg", latest_frame)
+            if not ret:
+                continue
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+
+# ===================== 全部路由区 =====================
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template("index.html")
 
-# 文件上传 + 模拟识别接口
-@app.route('/upload', methods=['POST'])
-def upload_file():
-    # 1. 检查有没有上传文件
-    if 'file' not in request.files:
-        return jsonify({'code': 400, 'msg': '没有上传文件'}), 400
-    
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'code': 400, 'msg': '文件名为空'}), 400
-    # 2. 检查文件格式
-    if not allowed_file(file.filename):
-        return jsonify({'code': 400, 'msg': '仅支持 png/jpg/jpeg/mp4 格式'}), 400
-    # 3. 保存文件，用随机命名避免重名
-    ext = file.filename.rsplit('.', 1)[1].lower()
-    new_filename = str(uuid.uuid4()) + '.' + ext
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], new_filename)
-    file.save(file_path)
-    # 4. 模拟AI识别结果（后续替换成YOLO）
-    detect_result = {
-        "goggles": "佩戴",
-        "goggles_conf": 0.89,
-        "gloves": "未佩戴",
-        "gloves_conf": 0.76,
-        "coat": "穿戴",
-        "coat_conf": 0.92
-    }
-    # 5. 判断风险等级
-    risk_level = "存在风险" if (detect_result["goggles"] == "未佩戴" 
-                                or detect_result["gloves"] == "未佩戴" 
-                                or detect_result["coat"] == "未穿戴") else "合规"
-    # 6. 保存记录到数据库
-    conn = get_db()
-    cursor = conn.cursor()
-    detect_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute("""
-        INSERT INTO detection_record 
-        (detect_time, file_name, goggles, gloves, coat, goggles_conf, gloves_conf, coat_conf, risk_level, image_path)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (detect_time, file.filename, 
-          detect_result["goggles"], detect_result["gloves"], detect_result["coat"],
-          detect_result["goggles_conf"], detect_result["gloves_conf"], detect_result["coat_conf"],
-          risk_level, file_path))
-    conn.commit()
-    conn.close()
-    # 7. 返回识别结果给前端
-    return jsonify({
-        'code': 200,
-        'msg': '识别成功',
-        'data': {
-            'filename': file.filename,
-            'detect_time': detect_time,
-            'result': detect_result,
-            'risk_level': risk_level
-        }
-    })
-
-# 图片访问接口：预览上传图片
-@app.route('/get_img/<filename>')
-def get_img(filename):
-    return send_from_directory(UPLOAD_FOLDER, filename)
-
-# 删除单条检测记录接口
-@app.route('/del_record/<int:record_id>', methods=['DELETE'])
-def del_record(record_id):
-    conn = get_db()
-    cursor = conn.cursor()
-    # 删除数据库记录
-    cursor.execute("DELETE FROM detection_record WHERE id = ?", (record_id,))
-    conn.commit()
-    conn.close()
-    return jsonify({"code":200, "msg":"删除成功"})
-
-# 历史记录网页页面
-@app.route('/historypage')
-def history_page():
-    return render_template('history.html')
-
-# 查询历史记录接口
 @app.route('/history')
-def get_history():
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM detection_record ORDER BY detect_time DESC")
-    records = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return jsonify({'code': 200, 'data': records})
+def history_page():
+    return render_template("history.html")
 
-# ==================== 启动程序 ====================
+@app.route('/monitor')
+def monitor():
+    return render_template("monitor.html")
+
+@app.route("/upload", methods=["POST"])
+def upload_img():
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"ok":False,"msg":"没有文件"})
+    timestr = time.strftime("%Y%m%d_%H%M%S")
+    fname = f"upload_{timestr}.jpg"
+    savep = os.path.join(app.config['UPLOAD_FOLDER'], fname)
+    file.save(savep)
+    # 读取上传图片，同样调用模型接口
+    frame = cv2.imread(savep)
+    annotated, info_str, is_violate = detect_frame(frame)
+    outname = f"res_{timestr}.jpg"
+    outpath = os.path.join(app.config['UPLOAD_FOLDER'], outname)
+    cv2.imwrite(outpath, annotated)
+    if is_violate:
+        save_and_record(annotated, info_str)
+    return jsonify({"ok":True,"msg":info_str,"imgname":outname})
+
+@app.route("/api/get_history")
+def get_history():
+    conn = sqlite3.connect("record.db")
+    rows = conn.execute("SELECT * FROM history ORDER BY id DESC").fetchall()
+    conn.close()
+    data = []
+    for r in rows:
+        data.append({
+            "id": r[0],
+            "img_path": r[1],
+            "result": r[2],
+            "time": r[3]
+        })
+    return jsonify(data)
+
+@app.route("/api/del_record/<int:rid>", methods=["POST"])
+def del_record(rid):
+    conn = sqlite3.connect("record.db")
+    conn.execute("DELETE FROM history WHERE id=?", (rid,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+@app.route("/uploads/<filename>")
+def preview_img(filename):
+    from flask import send_from_directory
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+@app.route("/video_feed")
+def video_feed():
+    return Response(gen_stream(), mimetype="multipart/x-mixed-replace; boundary=frame")
+# ======================================================
+
 if __name__ == '__main__':
-    print("🚀 后端服务启动中...")
-    print("📌 访问地址：http://127.0.0.1:5000")
-    app.run(debug=True, port=5000)
+    try:
+        app.run(debug=True)
+    finally:
+        cap.release()

@@ -2,110 +2,46 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>检测历史记录</title>
+    <title>历史抓拍记录</title>
     <style>
-        body {
-            font-family: "微软雅黑", sans-serif;
-            max-width: 1100px;
-            margin: 40px auto;
-            padding: 0 20px;
-        }
-        table {
-            width:100%;
-            border-collapse: collapse;
-            margin-top:20px;
-        }
-        th,td {
-            border:1px solid #aaa;
-            padding:10px;
-            text-align:center;
-        }
-        th {
-            background-color:#e8e8e8;
-        }
-        .risk {
-            color:#d93025;
-            font-weight:bold;
-        }
-        .safe {
-            color:#188038;
-            font-weight:bold;
-        }
-        a {
-            display:inline-block;
-            margin-bottom:20px;
-        }
-        .del-btn{
-            color:white;
-            background:#d93025;
-            border:none;
-            padding:4px 8px;
-            border-radius:4px;
-            cursor:pointer;
-        }
-        .preview-img{
-            max-width:120px;
-            max-height:100px;
-        }
+        body {width:900px;margin:30px auto;font-family:system-ui;}
+        .item{border:1px solid #ddd;padding:12px;border-radius:6px;margin:10px 0;display:flex;gap:15px;align-items:center;}
+        .item img{width:180px;}
+        .del{color:red;cursor:pointer;}
     </style>
 </head>
 <body>
-    <a href="/">← 返回识别首页</a>
-    <h2>检测历史记录</h2>
-    <table>
-        <thead>
-            <tr>
-                <th>序号</th>
-                <th>检测时间</th>
-                <th>原图预览</th>
-                <th>护目镜</th>
-                <th>手套</th>
-                <th>防护服</th>
-                <th>风险等级</th>
-                <th>操作</th>
-            </tr>
-        </thead>
-        <tbody id="tableBody">
-        </tbody>
-    </table>
+    <h1>历史违规抓拍记录</h1>
+    <a href="/">返回首页</a>
+    <a href="/monitor">实时监控</a>
+    <div id="list"></div>
 
     <script>
-        fetch('/history')
-        .then(res=>res.json())
-        .then(res=>{
-            const records = res.data;
-            const tbody = document.getElementById("tableBody");
-            records.forEach((item,idx)=>{
-                let tr = document.createElement("tr");
-                let riskClass = item.risk_level === "存在风险" ? "risk" : "safe";
-                // 从image_path提取文件名
-                const imgName = item.image_path.split('\\').pop().split('/').pop();
-                const imgUrl = `/get_img/${imgName}`;
-
-                tr.innerHTML = `
-                    <td>${idx+1}</td>
-                    <td>${item.detect_time}</td>
-                    <td><img class="preview-img" src="${imgUrl}" alt="原图"></td>
-                    <td>${item.goggles}(${item.goggles_conf})</td>
-                    <td>${item.gloves}(${item.gloves_conf})</td>
-                    <td>${item.coat}(${item.coat_conf})</td>
-                    <td class="${riskClass}">${item.risk_level}</td>
-                    <td><button class="del-btn" onclick="deleteRecord(${item.id})">删除</button></td>
+        async function loadList(){
+            const res = await fetch("/api/get_history");
+            const data = await res.json();
+            const wrap = document.getElementById("list");
+            wrap.innerHTML = "";
+            data.forEach(row=>{
+                const div = document.createElement("div");
+                div.className="item";
+                div.innerHTML = `
+                    <img src="/uploads/${row.img_path}">
+                    <div>
+                        <div>时间：${row.time}</div>
+                        <div>识别内容：${row.result}</div>
+                        <div class="del" onclick="del(${row.id})">删除本条记录</div>
+                    </div>
                 `;
-                tbody.appendChild(tr);
-            })
-        })
-
-        // 删除记录函数
-        function deleteRecord(id){
-            if(!confirm("确定删除这条记录？")) return;
-            fetch(`/del_record/${id}`,{
-                method:"DELETE"
-            }).then(res=>res.json()).then(ret=>{
-                alert(ret.msg);
-                window.location.reload();
+                wrap.appendChild(div);
             })
         }
+        async function del(id){
+            if(!confirm("确定删除？")) return;
+            await fetch(`/api/del_record/${id}`,{method:"POST"});
+            loadList();
+        }
+        loadList();
     </script>
 </body>
 </html>
